@@ -17,8 +17,8 @@
     .\win-settings-backup.ps1                            # Menu interactivo
     .\win-settings-backup.ps1 -Backup                   # Backup directo
     .\win-settings-backup.ps1 -Restore                  # Restaurar (menu)
-    .\win-settings-backup.ps1 -Restore -BackupPath "D:\backup-AORUS-2026-07-07_1530"
-    Invoke-Command -ComputerName BEE -ScriptBlock { & "C:\...\win-settings-backup.ps1" -Backup }
+    .\win-settings-backup.ps1 -Restore -BackupPath "D:\backup-PC1-2026-01-15_1030"
+    Invoke-Command -ComputerName PC2 -ScriptBlock { & "C:\...\win-settings-backup.ps1" -Backup }
 .NOTES
     Requiere PowerShell 7+ y permisos de administrador.
     https://github.com/D4rumanDev/win-settings-backup

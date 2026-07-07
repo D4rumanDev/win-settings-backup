@@ -48,7 +48,7 @@ irm https://raw.githubusercontent.com/D4rumanDev/win-settings-backup/master/win-
 .\win-settings-backup.ps1                            # Menú interactivo
 .\win-settings-backup.ps1 -Backup                   # Backup directo
 .\win-settings-backup.ps1 -Restore                  # Restaurar (menú de selección)
-.\win-settings-backup.ps1 -Restore -BackupPath "D:\backup-AORUS-2026-07-07_1530"
+.\win-settings-backup.ps1 -Restore -BackupPath "D:\backup-PC1-2026-01-15_1030"
 .\win-settings-backup.ps1 -List                     # Listar copias guardadas
 ```
 
@@ -56,13 +56,13 @@ irm https://raw.githubusercontent.com/D4rumanDev/win-settings-backup/master/win-
 
 ```powershell
 # Backup en equipo remoto
-Invoke-Command -ComputerName BEE -ScriptBlock {
-    & "C:\Users\jfrico\Scripts\win-settings-backup.ps1" -Backup
+Invoke-Command -ComputerName PC2 -ScriptBlock {
+    & "C:\Scripts\win-settings-backup.ps1" -Backup
 }
 
 # Restaurar desde ruta de red (requiere admin en destino)
-Invoke-Command -ComputerName BEE -ScriptBlock {
-    & "C:\...\win-settings-backup.ps1" -Restore -BackupPath "\\NAS\homes\juanf\backup-AORUS-2026-07-07_1530"
+Invoke-Command -ComputerName PC2 -ScriptBlock {
+    & "C:\Scripts\win-settings-backup.ps1" -Restore -BackupPath "\\NAS\shared\backup-PC1-2026-01-15_1030"
 }
 ```
 
@@ -88,7 +88,7 @@ Invoke-Command -ComputerName BEE -ScriptBlock {
 ## Estructura de la copia
 
 ```
-backup-AORUS-2026-07-07_1530\
+backup-PC1-2026-01-15_1030\
 ├── registry\
 │   ├── Accessibility.reg
 │   ├── Desktop.reg
