@@ -31,14 +31,39 @@ Cada copia guarda tres elementos:
 
 ## Uso
 
-```powershell
-# Menú interactivo (recomendado)
-.\win-settings-backup.ps1
+### Desde GitHub (irm)
 
-# Modo no interactivo
-.\win-settings-backup.ps1 -Backup
-.\win-settings-backup.ps1 -Restore
+```powershell
+# Menú interactivo — se auto-eleva a admin
+irm https://raw.githubusercontent.com/D4rumanDev/win-settings-backup/master/win-settings-backup.ps1 | iex
+
+# Con parámetros (requiere ScriptBlock para pasar args)
+& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/D4rumanDev/win-settings-backup/master/win-settings-backup.ps1'))) -Backup
+& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/D4rumanDev/win-settings-backup/master/win-settings-backup.ps1'))) -List
+```
+
+### Desde archivo local
+
+```powershell
+.\win-settings-backup.ps1                            # Menú interactivo
+.\win-settings-backup.ps1 -Backup                   # Backup directo
+.\win-settings-backup.ps1 -Restore                  # Restaurar (menú de selección)
 .\win-settings-backup.ps1 -Restore -BackupPath "D:\backup-AORUS-2026-07-07_1530"
+.\win-settings-backup.ps1 -List                     # Listar copias guardadas
+```
+
+### Ejecución remota (Invoke-Command)
+
+```powershell
+# Backup en equipo remoto
+Invoke-Command -ComputerName BEE -ScriptBlock {
+    & "C:\Users\jfrico\Scripts\win-settings-backup.ps1" -Backup
+}
+
+# Restaurar desde ruta de red (requiere admin en destino)
+Invoke-Command -ComputerName BEE -ScriptBlock {
+    & "C:\...\win-settings-backup.ps1" -Restore -BackupPath "\\NAS\homes\juanf\backup-AORUS-2026-07-07_1530"
+}
 ```
 
 ### Hacer una copia de seguridad

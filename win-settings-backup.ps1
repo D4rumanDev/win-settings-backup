@@ -26,6 +26,7 @@
 param(
     [switch]$Backup,
     [switch]$Restore,
+    [switch]$List,
     [string]$BackupPath
 )
 
@@ -48,7 +49,14 @@ if (-not $isAdmin) {
         Write-Error 'Se requieren permisos de administrador. Ejecuta la sesion remota como admin (RunAs).'
         exit 1
     }
-    $argStr = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    # Si PSCommandPath esta vacio (irm | iex / ScriptBlock) guardar fuente en temp
+    if (-not $PSCommandPath) {
+        $tmp = "$env:TEMP\win-settings-backup.ps1"
+        $MyInvocation.MyCommand.ScriptBlock.ToString() | Set-Content $tmp -Encoding UTF8
+        $script:_irm_tmp = $tmp
+    }
+    $target  = if ($PSCommandPath) { $PSCommandPath } else { $script:_irm_tmp }
+    $argStr  = "-NoExit -ExecutionPolicy Bypass -File `"$target`""
     if ($Backup)     { $argStr += ' -Backup' }
     if ($Restore)    { $argStr += ' -Restore' }
     if ($BackupPath) { $argStr += " -BackupPath `"$BackupPath`"" }
@@ -331,6 +339,7 @@ New-Item -ItemType Directory -Force -Path $BackupsRoot | Out-Null
 
 if ($Backup)  { Invoke-Backup; exit 0 }
 if ($Restore) { Invoke-Restore -Path $BackupPath; exit 0 }
+if ($List)    { Show-Backups; exit 0 }
 
 # En sesion remota sin parametros, mostrar ayuda y salir
 if ($IsRemote) {
