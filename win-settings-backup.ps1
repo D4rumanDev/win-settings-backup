@@ -4,18 +4,21 @@
 .DESCRIPTION
     Exporta e importa los ajustes definidos en el catalogo de Windows Backup:
     accesibilidad, interfaz, raton, notificaciones, temas, Wi-Fi y apps instaladas.
-    Disenado para replicar configuracion entre equipos o recuperar tras un reinstall.
+    Las rutas de usuario en los .reg se normalizan con un placeholder portable.
+    Soporta ejecucion local (menu interactivo) y remota (Invoke-Command / SSH).
 .PARAMETER Backup
-    Ejecuta la copia de seguridad directamente sin mostrar el menu.
+    Ejecuta la copia de seguridad sin mostrar el menu.
 .PARAMETER Restore
     Ejecuta la restauracion sin mostrar el menu.
 .PARAMETER BackupPath
     Ruta a la carpeta de backup a restaurar (usar con -Restore).
+    En modo remoto sin -BackupPath se usa la copia mas reciente.
 .EXAMPLE
-    .\win-settings-backup.ps1
-    .\win-settings-backup.ps1 -Backup
-    .\win-settings-backup.ps1 -Restore
+    .\win-settings-backup.ps1                            # Menu interactivo
+    .\win-settings-backup.ps1 -Backup                   # Backup directo
+    .\win-settings-backup.ps1 -Restore                  # Restaurar (menu)
     .\win-settings-backup.ps1 -Restore -BackupPath "D:\backup-AORUS-2026-07-07_1530"
+    Invoke-Command -ComputerName BEE -ScriptBlock { & "C:\...\win-settings-backup.ps1" -Backup }
 .NOTES
     Requiere PowerShell 7+ y permisos de administrador.
     https://github.com/D4rumanDev/win-settings-backup
@@ -34,8 +37,17 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     exit 1
 }
 
-# ── Autoelevacion ─────────────────────────────────────────────────────────────
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]'Administrator')) {
+# ── Deteccion de sesion remota ────────────────────────────────────────────────
+# $PSSenderInfo existe en sesiones Invoke-Command; UserInteractive=false en SSH/servicios
+$IsRemote = ($null -ne $PSSenderInfo) -or (-not [System.Environment]::UserInteractive)
+
+# ── Autoelevacion (solo en sesion local) ──────────────────────────────────────
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]'Administrator')
+if (-not $isAdmin) {
+    if ($IsRemote) {
+        Write-Error 'Se requieren permisos de administrador. Ejecuta la sesion remota como admin (RunAs).'
+        exit 1
+    }
     $argStr = "-NoExit -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($Backup)     { $argStr += ' -Backup' }
     if ($Restore)    { $argStr += ' -Restore' }
@@ -49,6 +61,7 @@ $ErrorActionPreference = 'Continue'
 # ── Configuracion ─────────────────────────────────────────────────────────────
 $Version     = '1.0'
 $BackupsRoot = "$env:USERPROFILE\win-settings-backup"
+$RegPlaceholder = '{USERPROFILE}'
 
 $RegKeys = [ordered]@{
     'Accessibility'     = 'HKCU\Control Panel\Accessibility'
@@ -79,20 +92,62 @@ function Write-Skip($msg) { Write-Host "  [--]  $msg" -ForegroundColor DarkGray 
 function Write-Fail($msg) { Write-Host "  [!!]  $msg" -ForegroundColor Red }
 function Sep              { Write-Host $_sep -ForegroundColor DarkGray }
 
+function Get-OsVersion {
+    $osi   = Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue
+    if (-not $osi) { return [System.Environment]::OSVersion.VersionString }
+    $caption = $osi.Caption -replace 'Microsoft ', ''
+    $display = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -EA SilentlyContinue).DisplayVersion
+    return if ($display) { "$caption ($display)" } else { $caption }
+}
+
 function Show-Header {
     param([string]$Sub = '')
-    $osi = Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue
-    $os  = if ($osi) { $osi.Caption -replace 'Microsoft ', '' } else { 'Windows' }
-    Clear-Host
+    if (-not $IsRemote) { Clear-Host }
     Write-Host ''
     Write-Host $_sep -ForegroundColor Cyan
     Write-Host "   Windows Settings Backup  v$Version" -ForegroundColor Cyan
     Write-Host $_sep -ForegroundColor Cyan
     Write-Host "   Equipo : $($env:COMPUTERNAME.PadRight(16))  Usuario: $env:USERNAME" -ForegroundColor DarkGray
-    Write-Host "   Fecha  : $(Get-Date -Format 'yyyy-MM-dd HH:mm')       OS     : $os" -ForegroundColor DarkGray
+    Write-Host "   Fecha  : $(Get-Date -Format 'yyyy-MM-dd HH:mm')       OS     : $(Get-OsVersion)" -ForegroundColor DarkGray
     Write-Host $_sep -ForegroundColor Cyan
     if ($Sub) { Write-Host "   $Sub" -ForegroundColor Yellow }
     Write-Host ''
+}
+
+function Read-Confirm {
+    param([string]$Prompt)
+    if ($IsRemote) { Write-Host "  $Prompt [auto-S en modo remoto]" -ForegroundColor DarkGray; return $true }
+    (Read-Host "  $Prompt [S/N]") -match '^[Ss]'
+}
+
+# ── Registro portable: export con placeholder, import con path real ───────────
+function Export-RegPortable {
+    param([string]$Key, [string]$File)
+    reg export $Key $File /y 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    # Los .reg son UTF-16 LE; reemplazar la ruta del usuario por el placeholder
+    $content      = [System.IO.File]::ReadAllText($File, [System.Text.Encoding]::Unicode)
+    $userPathInReg = $env:USERPROFILE.Replace('\', '\\')
+    $content       = $content.Replace($userPathInReg, $RegPlaceholder)
+    [System.IO.File]::WriteAllText($File, $content, [System.Text.Encoding]::Unicode)
+    return $true
+}
+
+function Import-RegPortable {
+    param([string]$File)
+    $content = [System.IO.File]::ReadAllText($File, [System.Text.Encoding]::Unicode)
+    if ($content.Contains($RegPlaceholder)) {
+        $userPathInReg = $env:USERPROFILE.Replace('\', '\\')
+        $content       = $content.Replace($RegPlaceholder, $userPathInReg)
+        $tmp = "$env:TEMP\wsb-$([System.IO.Path]::GetRandomFileName()).reg"
+        [System.IO.File]::WriteAllText($tmp, $content, [System.Text.Encoding]::Unicode)
+        reg import $tmp 2>$null
+        $ok = $LASTEXITCODE -eq 0
+        Remove-Item $tmp -Force -EA SilentlyContinue
+        return $ok
+    }
+    reg import $File 2>$null
+    return $LASTEXITCODE -eq 0
 }
 
 # ── Backup ────────────────────────────────────────────────────────────────────
@@ -110,9 +165,9 @@ function Invoke-Backup {
     foreach ($kv in $RegKeys.GetEnumerator()) {
         $psPath = $kv.Value -replace '^HKCU\\', 'HKCU:\'
         if (-not (Test-Path $psPath)) { Write-Skip $kv.Key; continue }
-        reg export $kv.Value "$regDir\$($kv.Key).reg" /y 2>$null
-        if ($LASTEXITCODE -eq 0) { Write-Ok $kv.Key; $regOk++ }
-        else                     { Write-Fail $kv.Key }
+        if (Export-RegPortable -Key $kv.Value -File "$regDir\$($kv.Key).reg") {
+            Write-Ok $kv.Key; $regOk++
+        } else { Write-Fail $kv.Key }
     }
 
     Write-Host ''
@@ -134,13 +189,11 @@ function Invoke-Backup {
         } catch { Write-Ok 'Apps exportadas' }
     } else { Write-Fail 'winget no disponible o sin resultados' }
 
-    $osi = Get-CimInstance Win32_OperatingSystem -EA SilentlyContinue
     @{
         version  = $Version
         date     = (Get-Date -Format 'o')
         computer = $env:COMPUTERNAME
-        user     = $env:USERNAME
-        os       = if ($osi) { $osi.Caption } else { '' }
+        os       = Get-OsVersion
         registry = $regOk
         wifi     = $wifiCount
     } | ConvertTo-Json | Set-Content "$dest\manifest.json" -Encoding UTF8
@@ -150,6 +203,7 @@ function Invoke-Backup {
     Write-Host '  Copia guardada en:' -ForegroundColor White
     Write-Host "  $dest" -ForegroundColor Cyan
     Write-Host ''
+    return $dest
 }
 
 # ── Ver copias ────────────────────────────────────────────────────────────────
@@ -166,7 +220,7 @@ function Show-Backups {
             $d    = [datetime]::Parse($m.date).ToString('yyyy-MM-dd HH:mm')
             $size = [math]::Round((Get-ChildItem $b.FullName -Recurse -EA SilentlyContinue |
                                    Measure-Object Length -Sum).Sum / 1KB)
-            Write-Host "  $($m.computer) · $d · $($m.registry) claves · $($m.wifi) Wi-Fi · ${size} KB" -ForegroundColor DarkGray
+            Write-Host "  $($m.computer) · $($m.os) · $d · $($m.registry) claves · $($m.wifi) Wi-Fi · ${size} KB" -ForegroundColor DarkGray
         }
         Write-Host ''
     }
@@ -177,11 +231,14 @@ function Show-Backups {
 function Select-Backup {
     $items = Get-ChildItem "$BackupsRoot\backup-*" -Directory -EA SilentlyContinue |
              Sort-Object Name -Descending
-    if (-not $items) {
-        Show-Header 'RESTAURAR'
-        Write-Fail "No hay copias en $BackupsRoot"
-        Write-Host ''; return $null
+    if (-not $items) { return $null }
+
+    # En modo remoto, usar la copia mas reciente automaticamente
+    if ($IsRemote) {
+        Write-Host "  Auto-seleccionando copia mas reciente: $($items[0].Name)" -ForegroundColor DarkGray
+        return $items[0].FullName
     }
+
     Show-Header 'SELECCIONAR COPIA'
     $i = 1
     foreach ($b in $items) {
@@ -190,7 +247,7 @@ function Select-Backup {
         if (Test-Path $mf) {
             $m = Get-Content $mf -Raw | ConvertFrom-Json
             $d = [datetime]::Parse($m.date).ToString('yyyy-MM-dd HH:mm')
-            Write-Host "       $($m.computer) · $d · $($m.registry) claves · $($m.wifi) Wi-Fi" -ForegroundColor DarkGray
+            Write-Host "       $($m.computer) · $($m.os) · $d · $($m.registry) claves · $($m.wifi) Wi-Fi" -ForegroundColor DarkGray
         }
         Write-Host ''; $i++
     }
@@ -205,26 +262,28 @@ function Select-Backup {
 function Invoke-Restore {
     param([string]$Path = '')
     if (-not $Path) { $Path = Select-Backup }
-    if (-not $Path) { return }
+    if (-not $Path) {
+        if (-not $IsRemote) { Show-Header 'RESTAURAR' }
+        Write-Fail "No hay copias en $BackupsRoot"
+        Write-Host ''; return
+    }
     if (-not (Test-Path $Path -PathType Container)) {
-        Show-Header 'RESTAURAR'
+        if (-not $IsRemote) { Show-Header 'RESTAURAR' }
         Write-Fail "Ruta no encontrada: $Path"
         Write-Host ''; return
     }
 
-    Show-Header 'RESTAURAR COPIA DE SEGURIDAD'
+    if (-not $IsRemote) { Show-Header 'RESTAURAR COPIA DE SEGURIDAD' }
     Write-Host "  Origen: $Path" -ForegroundColor DarkGray
     Write-Host ''
 
     $regFiles = Get-ChildItem "$Path\registry\*.reg" -EA SilentlyContinue
     if ($regFiles) {
-        $ans = Read-Host "  Restaurar $($regFiles.Count) claves de registro? [S/N]"
-        if ($ans -match '^[Ss]') {
+        if (Read-Confirm "Restaurar $($regFiles.Count) claves de registro?") {
             Write-Host ''
             foreach ($f in $regFiles) {
-                reg import $f.FullName 2>$null
-                if ($LASTEXITCODE -eq 0) { Write-Ok $f.BaseName }
-                else                     { Write-Fail $f.BaseName }
+                if (Import-RegPortable -File $f.FullName) { Write-Ok $f.BaseName }
+                else                                      { Write-Fail $f.BaseName }
             }
             Write-Host ''
         }
@@ -232,8 +291,7 @@ function Invoke-Restore {
 
     $wifiFiles = Get-ChildItem "$Path\wifi\*.xml" -EA SilentlyContinue
     if ($wifiFiles) {
-        $ans = Read-Host "  Restaurar $($wifiFiles.Count) perfil(es) Wi-Fi? [S/N]"
-        if ($ans -match '^[Ss]') {
+        if (Read-Confirm "Restaurar $($wifiFiles.Count) perfil(es) Wi-Fi?") {
             Write-Host ''
             foreach ($f in $wifiFiles) {
                 netsh wlan add profile filename="$($f.FullName)" 2>$null | Out-Null
@@ -250,8 +308,7 @@ function Invoke-Restore {
             $n = ((Get-Content $appsFile -Raw | ConvertFrom-Json).Sources |
                   ForEach-Object { $_.Packages.Count } | Measure-Object -Sum).Sum
         } catch { $n = '?' }
-        $ans = Read-Host "  Instalar $n app(s) faltantes via winget? [S/N]"
-        if ($ans -match '^[Ss]') {
+        if (Read-Confirm "Instalar $n app(s) faltantes via winget?") {
             Write-Host ''
             Write-Host '  Instalando apps (puede tardar varios minutos)...' -ForegroundColor DarkGray
             winget import -i $appsFile --accept-package-agreements --accept-source-agreements --ignore-versions 2>&1 |
@@ -275,6 +332,13 @@ New-Item -ItemType Directory -Force -Path $BackupsRoot | Out-Null
 if ($Backup)  { Invoke-Backup; exit 0 }
 if ($Restore) { Invoke-Restore -Path $BackupPath; exit 0 }
 
+# En sesion remota sin parametros, mostrar ayuda y salir
+if ($IsRemote) {
+    Write-Host 'Modo remoto: usar -Backup o -Restore [-BackupPath <ruta>]' -ForegroundColor Yellow
+    exit 0
+}
+
+# Menu interactivo (sesion local)
 do {
     Show-Header
     Write-Host '    [1]  Hacer copia de seguridad' -ForegroundColor White
