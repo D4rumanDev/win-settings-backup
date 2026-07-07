@@ -105,7 +105,7 @@ function Get-OsVersion {
     if (-not $osi) { return [System.Environment]::OSVersion.VersionString }
     $caption = $osi.Caption -replace 'Microsoft ', ''
     $display = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -EA SilentlyContinue).DisplayVersion
-    return if ($display) { "$caption ($display)" } else { $caption }
+    return $display ? "$caption ($display)" : $caption
 }
 
 function Show-Header {
